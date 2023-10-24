@@ -48,7 +48,7 @@ func (p SecurityProtocol) String() string {
 type SASLMechanism int8
 
 const (
-	SASLMechanismNone SASLMechanism = iota - 1
+	SASLMechanismNone SASLMechanism = iota
 	SASLMechanismGSSAPI
 	SASLMechanismPlain
 	SASLMechanismScramSHA256

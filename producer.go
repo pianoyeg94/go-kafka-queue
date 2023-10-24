@@ -145,7 +145,16 @@ func (p *Producer) produce(topic string, key string, msg *Message, confirms chan
 		Value: msg.Body,
 	}
 
-	return p.producer.Produce(&libmsg, confirms)
+	return timer.RetryOverTime(context.Background(), -1, 0, 50*time.Millisecond, 250*time.Millisecond,
+		func(ctx context.Context) error { return p.producer.Produce(&libmsg, confirms) },
+		func(ctx context.Context, err error) bool {
+			liberr, ok := err.(kafka.Error)
+			if !ok {
+				return false
+			}
+			return liberr.Code() == kafka.ErrQueueFull
+		},
+	)
 }
 
 func (p *Producer) watchDeliveries() {

@@ -188,8 +188,8 @@ type indexCycle struct {
 
 func (c *indexCycle) next() int {
 	if c.currIdx > c.maxIdx {
-		c.currIdx = 0
-		return c.currIdx
+		c.currIdx = 1
+		return 0
 	}
 
 	idx := c.currIdx

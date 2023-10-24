@@ -30,7 +30,11 @@ import (
 	kafka "github.com/pianoyeg94/go-kafka-queue"
 )
 
-const topicEntityUpdated = "demo.entity.updated"
+const (
+	topicEntityUpdated = "demo.entity.updated"
+
+	produceEvery = 50 * time.Millisecond
+)
 
 var servers = [...]string{"localhost:9092", "localhost:9102", "localhost:9202"}
 
@@ -70,10 +74,8 @@ func run(ctx context.Context, logger *log.Logger) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
+		case <-time.After(produceEvery):
 		}
-
-		time.Sleep(500 * time.Millisecond)
 
 		entities[idx].Amount = i
 		body, err := json.Marshal(&entities[idx])

@@ -5,17 +5,18 @@
 package main
 
 import (
-  "encoding/hex"
+	"context"
+	"encoding/hex"
 	"encoding/json"
-  "context"
-  "log"
-  "os"
+	"fmt"
+	"log"
+	"math"
+	"os"
 	"os/signal"
-  "math"
-  "syscall"
-  "unicode/utf8"
+	"syscall"
+	"unicode/utf8"
 
-  kafka "github.com/pianoyeg94/go-kafka-queue"
+	kafka "github.com/pianoyeg94/go-kafka-queue"
 )
 
 const topicEntityUpdated = "demo.entity.updated"
@@ -23,84 +24,133 @@ const topicEntityUpdated = "demo.entity.updated"
 var servers = [...]string{"localhost:9092", "localhost:9102", "localhost:9202"}
 
 func main() {
-  ctx, cancel := context.WithCancel(context.Background())
-  defer cancel()
-  sig := make(chan os.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-  go func() { <-sig; cancel() }()
-  
-  var opts kafka.ProducerOptions
-  populateProducerOptions(&opts)
-  setProducerCallbacks(&opts)
-  producer, err := kafka.NewProducer(ctx, servers[:], &opts)
-  if err != nil {
-    log.Printf("Couldn't start producer: %w", err)
-    return
-  }
-  defer producer.Close()
+	go func() { <-sig; cancel() }()
 
-  entities := []struct {
+	logger := log.New(os.Stderr, "producer", log.LstdFlags)
+	if err := run(ctx, logger); err != nil {
+		logger.Fatalln(err)
+	}
+}
+
+func run(ctx context.Context, logger *log.Logger) error {
+	var opts kafka.ProducerOptions
+	populateProducerOptions(&opts)
+	setProducerCallbacks(logger, &opts)
+	producer, err := kafka.NewProducer(ctx, servers[:], &opts)
+	if err != nil {
+		return fmt.Errorf("error starting producer: %w", err)
+	}
+	defer producer.Close()
+
+	entities := []struct {
 		Name   string `json:"name"`
 		Amount int    `json:"amount"`
 	}{
 		{Name: "first_entity_1"},
 		{Name: "second_entity_2"},
-    {Name: "third_entity_3"},
+		{Name: "third_entity_3"},
 	}
-  for i := 0; ; i++ {
-    select {
-    case <-ctx.Done():
-        return
-    default:
-    }
+	cycle := newIndexCycle(len(entities) - 1)
+	for i, idx := 0, cycle.next(); ; i, idx = i+1, cycle.next() {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 
-        
-    idx := i/len(entities)
-    entities[idx].Amount = i
-    body, err := json.Marshal(&entities[idx])
-    if err != nil {
-        continue
-    }
+		entities[idx].Amount = i
+		body, err := json.Marshal(&entities[idx])
+		if err != nil {
+			continue
+		}
 
-    if err = producer.Produce(topicEntityUpdated,  entities[idx].Name /* key */, &kafka.Message{Body: body}); err != nil {
-      log.Printf(
-        "Error delivering message to kafka:\ntopic=%s\nbody=%s:\nerr=%w\n",
-        topicEntityUpdated,
-        string(body),
-        err,
-      )
-    }
-  }
+		if err = producer.Produce(topicEntityUpdated, entities[idx].Name /* key */, &kafka.Message{Body: body}); err != nil {
+			logger.Printf(`Error delivering message to kafka: 
+				topic=%s
+				body=%s
+				headers={}
+				err=%s
+				`,
+				topicEntityUpdated,
+				string(body),
+				err,
+			)
+		}
+
+		if err = producer.Produce(
+			topicEntityUpdated,
+			entities[idx].Name, // key
+			&kafka.Message{Body: body},
+		); err != nil {
+			logger.Printf(`Error delivering message to kafka: 
+				topic=%s
+				body=%s
+				headers={}
+				err=%s
+				`,
+				topicEntityUpdated,
+				string(body),
+				err,
+			)
+		}
+	}
 }
 
 func populateProducerOptions(opts *kafka.ProducerOptions) {
-  opts.SetSecurityProtocol(kafka.SecurityProtocolPlaintext).
-      SetRequiredAcks(kafka.AcksRequireAll).
-      SetRetries(math.MaxInt32).
-      SetMaxInFlight(5).
-      SetEnableIdempotence(true).
-      SetPartitioner(kafka.PartitionerConsistentRandom).
-      SetCompressionType(kafka.CompressionSnappy)
+	opts.SetSecurityProtocol(kafka.SecurityProtocolPlaintext).
+		SetRequiredAcks(kafka.AcksRequireAll).
+		SetRetries(math.MaxInt32).
+		SetMaxInFlight(5).
+		SetEnableIdempotence(true).
+		SetPartitioner(kafka.PartitionerConsistentRandom).
+		SetCompressionType(kafka.CompressionSnappy)
 }
 
-func setProducerCallbacks(opts *kafka.ProducerOptions) {
-  opts.SetDeliveryErrorCallback(func(err error, topic string, partition int32, msg *kafka.Message) {
-    log.Printf(
-      "Error delivering message to kafka:\ntopic=%s\npartition=%d\nheaders=%s\nbody=%s\nerr=%w\n",
-      topic,
-      partition,
-      messageHeadersToJSON(msg.Headers),
-      string(msg.Body),
-      err,
-    )
-  })
-  opts.SetInternalErrorCallback(func(err error, topic string) {
-	  log.Printf("Got producer internal error:\ntopic=%s\nerr=%w\n", topic, err)
+func setProducerCallbacks(logger *log.Logger, opts *kafka.ProducerOptions) {
+	opts.SetDeliveryErrorCallback(func(err error, topic string, partition int32, msg *kafka.Message) {
+		logger.Printf(`Error delivering message to kafka:
+			topic=%s
+			partition=%d
+			headers=%s
+			body=%s
+			err=%s
+			`,
+			topic,
+			partition,
+			messageHeadersToJSON(msg.Headers),
+			string(msg.Body),
+			err,
+		)
+	})
+	opts.SetDeliverySuccessCallback(func(topic string, partition int32, offset int64, msg *kafka.Message) {
+		logger.Printf(`Message delivered successfully to Kafka:
+			topic=%s
+			partition=%d
+			headers=%s
+			body=%s
+			`,
+			topic,
+			partition,
+			messageHeadersToJSON(msg.Headers),
+			string(msg.Body),
+		)
+	})
+	opts.SetInternalErrorCallback(func(err error, topic string) {
+		logger.Printf(`Got producer internal error:
+			topic=%s
+			err=%s`,
+			topic,
+			err,
+		)
 	})
 }
 
 func messageHeadersToJSON(headers kafka.MessageHeaders) string {
-	jheaders = "{}"
+	jheaders := "{}"
 	if len(headers) == 0 {
 		return jheaders
 	}
@@ -121,6 +171,26 @@ func messageHeadersToJSON(headers kafka.MessageHeaders) string {
 	}
 
 	return jheaders
+}
+
+func newIndexCycle(maxIdx int) *indexCycle {
+	return &indexCycle{maxIdx: maxIdx}
+}
+
+type indexCycle struct {
+	maxIdx  int
+	currIdx int
+}
+
+func (c *indexCycle) next() int {
+	if c.currIdx > c.maxIdx {
+		c.currIdx = 0
+		return c.currIdx
+	}
+
+	idx := c.currIdx
+	c.currIdx++
+	return idx
 }
 ```
 

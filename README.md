@@ -1,5 +1,15 @@
 # go-kafka-queue
 
+#### Create topic
+```bash
+docker-compose exec kafka-1 kafka-topics \
+	--bootstrap-server localhost:29092,kafka-2:29092,kafka-3:29092 \
+	--create \
+	--topic demo.entity.updated \
+	--partitions 3 \
+	--replication-factor 3
+```
+
 #### Producer main.go
 ```go
 package main
@@ -14,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	kafka "github.com/pianoyeg94/go-kafka-queue"
@@ -30,7 +41,7 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() { <-sig; cancel() }()
 
-	logger := log.New(os.Stderr, "producer", log.LstdFlags)
+	logger := log.New(os.Stderr, "producer: ", log.LstdFlags|log.Lmsgprefix)
 	if err := run(ctx, logger); err != nil {
 		logger.Fatalln(err)
 	}
@@ -50,9 +61,9 @@ func run(ctx context.Context, logger *log.Logger) error {
 		Name   string `json:"name"`
 		Amount int    `json:"amount"`
 	}{
-		{Name: "first_entity_1"},
-		{Name: "second_entity_2"},
-		{Name: "third_entity_3"},
+		{Name: "John"},
+		{Name: "Elizabeth"},
+		{Name: "Tom"},
 	}
 	cycle := newIndexCycle(len(entities) - 1)
 	for i, idx := 0, cycle.next(); ; i, idx = i+1, cycle.next() {
@@ -62,23 +73,12 @@ func run(ctx context.Context, logger *log.Logger) error {
 		default:
 		}
 
+		time.Sleep(500 * time.Millisecond)
+
 		entities[idx].Amount = i
 		body, err := json.Marshal(&entities[idx])
 		if err != nil {
 			continue
-		}
-
-		if err = producer.Produce(topicEntityUpdated, entities[idx].Name /* key */, &kafka.Message{Body: body}); err != nil {
-			logger.Printf(`Error delivering message to kafka: 
-				topic=%s
-				body=%s
-				headers={}
-				err=%s
-				`,
-				topicEntityUpdated,
-				string(body),
-				err,
-			)
 		}
 
 		if err = producer.Produce(
@@ -86,13 +86,15 @@ func run(ctx context.Context, logger *log.Logger) error {
 			entities[idx].Name, // key
 			&kafka.Message{Body: body},
 		); err != nil {
-			logger.Printf(`Error delivering message to kafka: 
+			logger.Printf(`Error delivering message to kafka:
 				topic=%s
+				key=%s
 				body=%s
 				headers={}
 				err=%s
 				`,
 				topicEntityUpdated,
+				entities[idx].Name,
 				string(body),
 				err,
 			)
@@ -199,125 +201,168 @@ func (c *indexCycle) next() int {
 package main
 
 import (
-    "flag"
-    "fmt"
-    "log"
-    "log"
-    "os"
-	  "os/signal"
-    "strconv"
-    "strings"
-    "syscall"
-    "time"
-    "unicode/utf8"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+	"unicode/utf8"
 
-    kafka "github.com/pianoyeg94/go-kafka-queue"
+	kafka "github.com/pianoyeg94/go-kafka-queue"
 )
 
 const topicEntityUpdated = "demo.entity.updated"
 
 var (
-    groupId         string
-    groupInstanceId string
+	groupId         string
+	groupInstanceId string
 
-    servers = [...]string{"localhost:9092", "localhost:9102", "localhost:9202"}
+	servers = [...]string{"localhost:9092", "localhost:9102", "localhost:9202"}
 )
 
 func init() {
 	flag.StringVar(&groupId, "group.id", "demo", "consumer group.id")
 	flag.StringVar(&groupInstanceId, "group.instance.id", "", "consumer group.instance.id")
 	flag.Parse()
-  if groupInstanceId != "" {
-    groupInstanceId = fmt.Sprintf("%s-%s", groupId, groupInstanceId)
-  }
+	if groupInstanceId != "" {
+		groupInstanceId = fmt.Sprintf("%s-%s", groupId, groupInstanceId)
+	}
 }
 
 func main() {
-  ctx, cancel := context.WithCancel(context.Background())
-  defer cancel()
-  sig := make(chan os.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-  go func() { <-sig; cancel() }()
+	go func() { <-sig; cancel() }()
 
-  var opts kafka.ConsumerOptions
-  populateConsumerOptions(&opts)
-  setConsumerCallbacks(&opts)
-  consumer, err := kafka.NewConsumer(ctx, servers[:], topicEntityUpdated, groupId, &opts)
-  if err != nil {
-    log.Printf("Couldn't start consumer: %w", err)
-    return
-  }
-  defer func() {
-    if err := consumer.Close() {
-      log.Printf("Error closing consumer: %w" err)
-    }
-  }()
+	logger := log.New(os.Stderr, "consumer: ", log.LstdFlags|log.Lmsgprefix)
+	if err := run(ctx, logger); err != nil {
+		logger.Fatalln(err)
+	}
+}
+
+func run(ctx context.Context, logger *log.Logger) error {
+	var opts kafka.ConsumerOptions
+	populateConsumerOptions(&opts)
+	setConsumerCallbacks(logger, &opts)
+	consumer, err := kafka.NewConsumer(ctx, servers[:], topicEntityUpdated, groupId, &opts)
+	if err != nil {
+		return fmt.Errorf("error starting consumer: %w", err)
+	}
+	defer func() {
+		if err := consumer.Close(); err != nil {
+			logger.Printf("Error closing consumer: %s", err)
+		}
+	}()
+
+	if err = consumer.Consume(executionTimeMiddlewareFactory(logger, entityUpdated)); err != nil {
+		return fmt.Errorf("error starting consumer: %w", err)
+	}
+
+	<-ctx.Done()
+	return nil
 }
 
 func entityUpdated(ctx context.Context, msg *kafka.Message) error {
-  topic, partition, offset := parseKafkaId(msg.KafkaId)
-  log.Printf(
-    "Processed kafka message:\ntopic=%s\npartition=%d\noffset=%d\nheaders=%s\nbody=%s\n", 
-    topic,
-    partition,
-    offset,
-    messageHeadersToJSON(msg.Headers),
-    string(msg.Body)
-  )
-  return nil
+	topic, partition, offset := parseKafkaId(msg.KafkaId)
+	log.Printf(`Processed kafka message:
+		topic=%s
+		partition=%d
+		offset=%d
+		headers=%s
+		body=%s
+		`,
+		topic,
+		partition,
+		offset,
+		messageHeadersToJSON(msg.Headers),
+		string(msg.Body),
+	)
+	return nil
 }
 
-func executionTimeMiddlewareFactory(h kafka.HandleFunc) kafka.HandleFunc {
-
+func executionTimeMiddlewareFactory(logger *log.Logger, h kafka.HandleFunc) kafka.HandleFunc {
+	return func(ctx context.Context, msg *kafka.Message) error {
+		start := time.Now()
+		err := h(ctx, msg)
+		logger.Printf(
+			"It took %s entityUpdated event handler to process the incoming event corresponding to the following kafkaId: %s",
+			time.Since(start),
+			msg.KafkaId,
+		)
+		return err
+	}
 }
 
 func populateConsumerOptions(opts *kafka.ConsumerOptions) {
-  opts.SetSecurityProtocol(kafka.SecurityProtocolPlaintext).
-      SetPartitionAssignmentStrategy(kafka.CooperativeStickyAssignmentStrategy).
-      SetAutoOffsetReset(kafka.AutoOffsetResetEarliest).
-      SetCommitInterval(5 * time.Second).
-      SetCommitThreshold(100).
-      SetPartitionBufferSize(100).
-      SetMessageRetriesMaxAttempts(5).
-      SetMessageRetriesInitialDelay(0).
-      SetMessageRetriesBackoff(500 * time.Millisecond).
-      SetMessageRetriesMaxDelay(2 * time.Second)
+	opts.SetSecurityProtocol(kafka.SecurityProtocolPlaintext).
+		SetPartitionAssignmentStrategy(kafka.CooperativeStickyAssignmentStrategy).
+		SetAutoOffsetReset(kafka.AutoOffsetResetEarliest).
+		SetCommitInterval(5 * time.Second).
+		SetCommitThreshold(100).
+		SetPartitionBufferSize(100).
+		SetMessageRetriesMaxAttempts(5).
+		SetMessageRetriesInitialDelay(0).
+		SetMessageRetriesBackoff(500 * time.Millisecond).
+		SetMessageRetriesMaxDelay(2 * time.Second)
 
-  if groupInstanceId != "" {
-    opts.SetGroupInstanceId(groupInstanceId)
-  }
+	if groupInstanceId != "" {
+		opts.SetGroupInstanceId(groupInstanceId)
+	}
 }
 
-func setConsumerCallbacks(opts *kafka.ConsumerOptions) {
-  opts.SetHandlerErrorCallback(func(err error, topic string, groupId string, partition int32, offset int64, msg *kafka.Message) {
-    log.Printf(
-      "Error handling kafka message:\ntopic=%s\ngroupId=%s\npartition=%d\noffset=%d\nheaders=%s\nbody=%s\nerr=%w\n",
-      topic,
-      groupId,
-      partition,
-      offset,
-      messageHeadersToJSON(msg.Headers),
-      string(msg.Body),
-    )
-  })
-  opts.SetInternalErrorCallback(func(err error, topic string) {
-    log.Printf("Got consumer internal error:\ntopic=%s\nerr=%w\n", topic, err)
-  })
+func setConsumerCallbacks(logger *log.Logger, opts *kafka.ConsumerOptions) {
+	opts.SetHandlerErrorCallback(func(err error, topic string, groupId string, partition int32, offset int64, msg *kafka.Message) {
+		logger.Printf(`Error handling kafka message:
+			ntopic=%s
+			groupId=%s
+			partition=%d
+			offset=%d
+			headers=%s
+			body=%s
+			err=%s
+			`,
+			topic,
+			groupId,
+			partition,
+			offset,
+			messageHeadersToJSON(msg.Headers),
+			string(msg.Body),
+			err,
+		)
+	})
+	opts.SetInternalErrorCallback(func(err error, topic string) {
+		logger.Printf(`Got consumer internal error:
+			topic=%s
+			err=%s
+			`,
+			topic,
+			err,
+		)
+	})
 }
 
 func parseKafkaId(id string) (topic string, partition, offset int) {
-  parts := strings.Split(id)
-  if len(parts) != 3 {
-    return "", 0, 0
-  }
+	parts := strings.Split(id, "_")
+	if len(parts) != 3 {
+		return "", 0, 0
+	}
 
-  partition, _ = strconv.Atoi(parts[1])
-  offset, _ = strconv.Atoi(parts[2])
-  return parts[0], partition, offset
+	partition, _ = strconv.Atoi(parts[1])
+	offset, _ = strconv.Atoi(parts[2])
+	return parts[0], partition, offset
 }
 
 func messageHeadersToJSON(headers kafka.MessageHeaders) string {
-	jheaders = "{}"
+	jheaders := "{}"
 	if len(headers) == 0 {
 		return jheaders
 	}

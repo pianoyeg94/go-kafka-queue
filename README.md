@@ -11,7 +11,7 @@ consumer group, they will continue processing messages starting from offsets pre
 NOTE: consumer handler retries shouldn't take to much time, otherwise they will block other upcoming messages from the same partition.
 
 #### Currently lacking
-- Although this package is heavily used without a single incident for the last 6 months as a   message bus by a production system with hundreds of microservices, it's still has no test coverage. Thorough unit and integration test coverage is the number one priority to make this package more reliable for end users.
+- Although this package is heavily used without a single incident for the last 6 months as a message bus by a production system with hundreds of microservices, it's still has no test coverage. Thorough unit and integration test coverage is the number one priority to make this package more reliable for end users.
 
 #### docker-compose.yaml
 ```yaml

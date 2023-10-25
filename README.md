@@ -1,12 +1,12 @@
 # go-kafka-queue
 
 This package allows you to use Kafka as a message queue with at-least-once delivery
-semantics out of the box. Each incoming message's `KafkaId` attribute provides a mechanism to achieve idempotance within you consumer handlers (depends on how and where `KafkaId`s will be stored and later retrieved).
+semantics out of the box. Each incoming message's `KafkaId` attribute provides a mechanism to achieve idempotence within you consumer handlers (depends on how and where `KafkaId`s will be stored and later retrieved).
 
 All partitions assigned to a single consumer group member are handled concurrently and possibly even in parallel. 
 
-Offsets are committed only after a message is processed by your consumer handler (more precisely messages are commited in batches). It's advisable to set consumer's `AutoOffsetReset` policy to `AutoOffsetResetEarliest`, so that the first member to join a consumer group will be able to read the topic from the start, as if it was a typical queue. After other services join the same
-consumer group, they will continue processing messages starting from offsets previously commited by the first member.
+Offsets are committed only after a message is processed by your consumer handler (more precisely messages are committed in batches). It's advisable to set consumer's `AutoOffsetReset` policy to `AutoOffsetResetEarliest`, so that the first member to join a consumer group will be able to read the topic from the start, as if it was a typical queue. After other services join the same
+consumer group, they will continue processing messages starting from offsets previously committed by the first member.
 
 NOTE: consumer handler retries shouldn't take to much time, otherwise they will block other upcoming messages from the same partition.
 

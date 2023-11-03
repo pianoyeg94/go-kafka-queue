@@ -191,6 +191,12 @@ type ConsumerOptions struct {
 	HandlerSuccessCallback HandlerSuccessCallback // Default: no callback
 	HandlerErrorCallback   HandlerErrorCallback   // Default: no callback
 	InternalErrorCallback  InternalErrorCallback  // Default: no callback
+
+	// Override any options set above, as well as give the ability
+	// to additionaly configure your kafka client.
+	// Come from https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md.
+	// Valid keys are the ones marked with "*" and "C" (C/P column).
+	rawOptions kafka.ConfigMap
 }
 
 func (o *ConsumerOptions) SetSecurityProtocol(protocol SecurityProtocol) *ConsumerOptions {
@@ -320,6 +326,14 @@ func (o *ConsumerOptions) SetHandlerErrorCallback(callback HandlerErrorCallback)
 
 func (o *ConsumerOptions) SetInternalErrorCallback(callback InternalErrorCallback) *ConsumerOptions {
 	o.InternalErrorCallback = callback
+	return o
+}
+
+func (o *ConsumerOptions) SetRawOption(key string, value interface{}) *ConsumerOptions {
+	if o.rawOptions == nil {
+		o.rawOptions = make(kafka.ConfigMap, 1)
+	}
+	o.rawOptions.SetKey(key, value)
 	return o
 }
 
@@ -463,6 +477,10 @@ func (o *ConsumerOptions) toConfigMap() *kafka.ConfigMap {
 
 	if id := o.GroupInstanceId; id != "" {
 		cm.SetKey(configGroupInstanceId, id)
+	}
+
+	for key, value := range o.rawOptions {
+		cm.SetKey(key, value)
 	}
 
 	return &cm

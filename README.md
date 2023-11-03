@@ -275,6 +275,14 @@ type ProducerOptions struct {
 	//
 	// Default: no callback
 	InternalErrorCallback InternalErrorCallback
+
+	// Override any options set above, as well as give the ability
+	// to additionaly configure your kafka client.
+	// Come from https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md.
+	// Valid keys are the ones marked with "*" and "P" (C/P column).
+	// 
+	// Set via the `SetRawOption(key string, value interface{}) *ProducerOptions` method.
+	rawOptions kafka.ConfigMap
 }
 ```
 
@@ -384,7 +392,8 @@ func populateProducerOptions(opts *kafka.ProducerOptions) {
 		SetMaxInFlight(5).
 		SetEnableIdempotence(true).
 		SetPartitioner(kafka.PartitionerConsistentRandom).
-		SetCompressionType(kafka.CompressionSnappy)
+		SetCompressionType(kafka.CompressionSnappy).
+		SetRawOption("socket.nagle.disable", true)
 }
 
 func setProducerCallbacks(logger *log.Logger, opts *kafka.ProducerOptions) {
@@ -590,6 +599,14 @@ type ConsumerOptions struct {
 	HandlerSuccessCallback HandlerSuccessCallback // Default: no callback
 	HandlerErrorCallback   HandlerErrorCallback   // Default: no callback
 	InternalErrorCallback  InternalErrorCallback  // Default: no callback
+
+	// Override any options set above, as well as give the ability
+	// to additionaly configure your kafka client.
+	// Come from https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md.
+	// Valid keys are the ones marked with "*" and "C" (C/P column).
+	// 
+	// Set via the `SetRawOption(key string, value interface{}) *ConsumerOptions` method.
+	rawOptions kafka.ConfigMap
 }
 ```
 
@@ -709,7 +726,8 @@ func populateConsumerOptions(opts *kafka.ConsumerOptions) {
 		SetMessageRetriesMaxAttempts(5).
 		SetMessageRetriesInitialDelay(0).
 		SetMessageRetriesBackoff(500 * time.Millisecond).
-		SetMessageRetriesMaxDelay(2 * time.Second)
+		SetMessageRetriesMaxDelay(2 * time.Second).
+		SetRawOption("fetch.wait.max.ms", 300)
 
 	if groupInstanceId != "" {
 		opts.SetGroupInstanceId(groupInstanceId)

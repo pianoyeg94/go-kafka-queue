@@ -269,6 +269,12 @@ type ProducerOptions struct {
 	//
 	// Default: no callback
 	InternalErrorCallback InternalErrorCallback
+
+	// Override any options set above, as well as give the ability
+	// to additionaly configure your kafka client.
+	// Come from https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md.
+	// Valid keys are the ones marked with "*" and "P" (C/P column).
+	rawOptions kafka.ConfigMap
 }
 
 func (o *ProducerOptions) SetSecurityProtocol(protocol SecurityProtocol) *ProducerOptions {
@@ -403,6 +409,14 @@ func (o *ProducerOptions) SetDeliveryErrorCallback(callback DeliveryErrorCallbac
 
 func (o *ProducerOptions) SetInternalErrorCallback(callback InternalErrorCallback) *ProducerOptions {
 	o.InternalErrorCallback = callback
+	return o
+}
+
+func (o *ProducerOptions) SetRawOption(key string, value interface{}) *ProducerOptions {
+	if o.rawOptions == nil {
+		o.rawOptions = make(kafka.ConfigMap, 1)
+	}
+	o.rawOptions.SetKey(key, value)
 	return o
 }
 
@@ -602,6 +616,10 @@ func (o *ProducerOptions) toConfigMap() *kafka.ConfigMap {
 
 	if o.SASLPassword != "" {
 		cm.SetKey(configSASLPassword, o.SASLPassword)
+	}
+
+	for key, value := range o.rawOptions {
+		cm.SetKey(key, value)
 	}
 
 	return &cm
